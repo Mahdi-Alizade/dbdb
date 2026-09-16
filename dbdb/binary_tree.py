@@ -105,11 +105,61 @@ class BinaryTree:
         raise KeyError(key)
 
     def set(self, key, value):
-        if self._storage.lock():
+        if not self._storage.locked:
+            self._storage.lock()
             self._refresh_tree_ref()
         node = self._follow(self._tree_ref)
         new_node_ref = self._insert(node, key, ValueRef(value))
         self._tree_ref = new_node_ref
+
+    def pop(self, key):
+        if not self._storage.locked:
+            self._storage.lock()
+            self._refresh_tree_ref()
+        node = self._follow(self._tree_ref)
+        new_node_ref = self._delete(node, key)
+        self._tree_ref = new_node_ref
+
+    def _delete(self, node, key):
+        if node is None:
+            raise KeyError(key)
+        if key < node.key:
+            new_left = self._delete(self._follow(node.left_ref), key)
+            new_node = BinaryNode(
+                new_left,
+                node.right_ref,
+                node.key,
+                node.value_ref,
+                node.length - 1,
+            )
+        elif key > node.key:
+            new_right = self._delete(self._follow(node.right_ref), key)
+            new_node = BinaryNode(
+                node.left_ref,
+                new_right,
+                node.key,
+                node.value_ref,
+                node.length - 1,
+            )
+        else:
+            if not node.left_ref.address and not node.left_ref._referent:
+                return node.right_ref
+            if not node.right_ref.address and not node.right_ref._referent:
+                return node.left_ref
+            
+            successor = self._follow(node.right_ref)
+            while successor.left_ref.address or successor.left_ref._referent:
+                successor = self._follow(successor.left_ref)
+            
+            new_right = self._delete(self._follow(node.right_ref), successor.key)
+            new_node = BinaryNode(
+                node.left_ref,
+                new_right,
+                successor.key,
+                successor.value_ref,
+                node.length - 1,
+            )
+        return self.node_ref_class(referent=new_node)
 
     def _insert(self, node, key, value_ref):
         if node is None:
