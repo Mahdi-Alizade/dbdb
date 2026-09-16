@@ -34,16 +34,24 @@ class Storage:
 
     def lock(self):
         if not self._locked:
+            current_pos = self._f.tell()
             self._f.seek(0)
             portalocker.lock(self._f, portalocker.LOCK_EX)
+            self._f.seek(current_pos)
             self._locked = True
 
     def unlock(self):
         if self._locked:
             self._f.flush()
+            current_pos = self._f.tell()
             self._f.seek(0)
-            portalocker.unlock(self._f)
-            self._locked = False
+            try:
+                portalocker.unlock(self._f)
+            except Exception:
+                pass
+            finally:
+                self._f.seek(current_pos)
+                self._locked = False
 
     def _seek_end(self):
         self._f.seek(0, os.SEEK_END)
@@ -97,5 +105,6 @@ class Storage:
         return struct.unpack(self.SUPERBLOCK_FORMAT, data)[0]
 
     def close(self):
-        self.unlock()
-        self._f.close()
+        if not self.closed:
+            self.unlock()
+            self._f.close()
