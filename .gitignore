@@ -1,0 +1,33 @@
+# Python Virtual Environment
+venv/
+.venv/
+env/
+ENV/
+
+# Byte-compiled / optimized files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Database files & locks (Local test artifacts)
+*.db
+*.dbdb
+*.lock
+
+# Environment & Secret Keys
+.env
+.env.*
+secrets.json
+
+# Testing & Coverage
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Operating System & Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
