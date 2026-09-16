@@ -1,87 +1,212 @@
-import os
-import struct
-import portalocker
+import pickle
 
 
-class Storage:
-    SUPERBLOCK_SIZE = 8
-    SUPERBLOCK_FORMAT = "!Q"
+class ValueRef:
+    def __init__(self, referent=None, address=0):
+        self._referent = referent
+        self._address = address
 
-    def __init__(self, f):
-        self._f = f
-        self.locked = False
-        self._ensure_superblock()
+    @property
+    def address(self):
+        return self._address
 
-    def _ensure_superblock(self):
-        self.lock()
-        self._seek_end()
-        end_address = self._f.tell()
-        if end_address < self.SUPERBLOCK_SIZE:
-            self._f.seek(0)
-            self._f.write(b"\x00" * self.SUPERBLOCK_SIZE)
-            self._f.flush()
-        self.unlock()
+    def prepare_to_store(self, storage):
+        pass
 
-    def lock(self):
-        if not self.locked:
-            portalocker.lock(self._f, portalocker.LOCK_EX)
-            self.locked = True
+    @staticmethod
+    def referent_to_string(referent):
+        return pickle.dumps(referent)
 
-    def unlock(self):
-        if self.locked:
-            self._f.flush()
-            portalocker.unlock(self._f)
-            self.locked = False
+    @staticmethod
+    def string_to_referent(string):
+        return pickle.loads(string)
 
-    def _seek_end(self):
-        self._f.seek(0, os.SEEK_END)
+    def get(self, storage):
+        if self._referent is None and self._address:
+            self._referent = self.string_to_referent(storage.read(self._address))
+        return self._referent
 
-    def _seek_superblock(self):
-        self._f.seek(0)
+    def store(self, storage):
+        if self._referent is not None and not self._address:
+            self.prepare_to_store(storage)
+            self._address = storage.write(self.referent_to_string(self._referent))
 
-    def write(self, data: bytes) -> int:
-        self._seek_end()
-        address = self._f.tell()
-        self._write_integer(len(data))
-        self._f.write(data)
-        return address
 
-    def read(self, address: int) -> bytes:
-        self._f.seek(address)
-        length = self._read_integer()
-        data = self._f.read(length)
-        return data
+class BinaryNodeRef(ValueRef):
+    def prepare_to_store(self, storage):
+        if self._referent:
+            self._referent.store_refs(storage)
 
-    def commit_root_address(self, root_address: int):
-        self.lock()
-        self._f.flush()
-        self._seek_superblock()
-        self._write_superblock_integer(root_address)
-        self._f.flush()
-        self.unlock()
+    @staticmethod
+    def referent_to_string(referent):
+        data = {
+            "left": referent.left_ref.address,
+            "right": referent.right_ref.address,
+            "key": referent.key,
+            "value": referent.value_ref.address,
+            "length": referent.length,
+        }
+        return pickle.dumps(data)
 
-    def get_root_address(self) -> int:
-        self._seek_superblock()
-        return self._read_superblock_integer()
+    @staticmethod
+    def string_to_referent(string):
+        data = pickle.loads(string)
+        return BinaryNode(
+            BinaryNodeRef(address=data["left"]),
+            BinaryNodeRef(address=data["right"]),
+            data["key"],
+            ValueRef(address=data["value"]),
+            data["length"],
+        )
 
-    def _write_integer(self, integer: int):
-        self._f.write(struct.pack("!I", integer))
 
-    def _read_integer(self) -> int:
-        data = self._f.read(4)
-        if not data:
-            return 0
-        return struct.unpack("!I", data)[0]
+class BinaryNode:
+    def __init__(self, left_ref, right_ref, key, value_ref, length):
+        self.left_ref = left_ref
+        self.right_ref = right_ref
+        self.key = key
+        self.value_ref = value_ref
+        self.length = length
 
-    def _write_superblock_integer(self, integer: int):
-        self._f.write(struct.pack(self.SUPERBLOCK_FORMAT, integer))
+    def store_refs(self, storage):
+        self.value_ref.store(storage)
+        self.left_ref.store(storage)
+        self.right_ref.store(storage)
 
-    def _read_superblock_integer(self) -> int:
-        data = self._f.read(self.SUPERBLOCK_SIZE)
-        if not data:
-            return 0
-        return struct.unpack(self.SUPERBLOCK_FORMAT, data)[0]
 
-    def close(self):
-        self.unlock()
-        self._f.close()
+class BinaryTree:
+    node_ref_class = BinaryNodeRef
+
+    def __init__(self, storage):
+        self._storage = storage
+        self._refresh_tree_ref()
+
+    def commit(self):
+        root_address = self._tree_ref.address
+        self._tree_ref.store(self._storage)
+        self._storage.commit_root_address(self._tree_ref.address)
+
+    def _refresh_tree_ref(self):
+        self._tree_ref = self.node_ref_class(
+            address=self._storage.get_root_address()
+        )
+
+    def get(self, key):
+        if not self._storage.locked:
+            self._refresh_tree_ref()
+        node = self._follow(self._tree_ref)
+        while node is not None:
+            if key < node.key:
+                node = self._follow(node.left_ref)
+            elif key > node.key:
+                node = self._follow(node.right_ref)
+            else:
+                return self._follow(node.value_ref)
+        raise KeyError(key)
+
+    def set(self, key, value):
+        if not self._storage.locked:
+            self._storage.lock()
+            self._refresh_tree_ref()
+        node = self._follow(self._tree_ref)
+        new_node_ref = self._insert(node, key, ValueRef(value))
+        self._tree_ref = new_node_ref
+
+    def pop(self, key):
+        if not self._storage.locked:
+            self._storage.lock()
+            self._refresh_tree_ref()
+        node = self._follow(self._tree_ref)
+        new_node_ref = self._delete(node, key)
+        self._tree_ref = new_node_ref
+
+    def _delete(self, node, key):
+        if node is None:
+            raise KeyError(key)
+        if key < node.key:
+            new_left = self._delete(self._follow(node.left_ref), key)
+            new_node = BinaryNode(
+                new_left,
+                node.right_ref,
+                node.key,
+                node.value_ref,
+                node.length - 1,
+            )
+        elif key > node.key:
+            new_right = self._delete(self._follow(node.right_ref), key)
+            new_node = BinaryNode(
+                node.left_ref,
+                new_right,
+                node.key,
+                node.value_ref,
+                node.length - 1,
+            )
+        else:
+            if not node.left_ref.address and not node.left_ref._referent:
+                return node.right_ref
+            if not node.right_ref.address and not node.right_ref._referent:
+                return node.left_ref
+            
+            successor = self._follow(node.right_ref)
+            while successor.left_ref.address or successor.left_ref._referent:
+                successor = self._follow(successor.left_ref)
+            
+            new_right = self._delete(self._follow(node.right_ref), successor.key)
+            new_node = BinaryNode(
+                node.left_ref,
+                new_right,
+                successor.key,
+                successor.value_ref,
+                node.length - 1,
+            )
+        return self.node_ref_class(referent=new_node)
+
+    def _insert(self, node, key, value_ref):
+        if node is None:
+            new_node = BinaryNode(
+                self.node_ref_class(),
+                self.node_ref_class(),
+                key,
+                value_ref,
+                1,
+            )
+        elif key < node.key:
+            new_left = self._insert(self._follow(node.left_ref), key, value_ref)
+            new_node = BinaryNode(
+                new_left,
+                node.right_ref,
+                node.key,
+                node.value_ref,
+                node.length + (1 if new_left.get(self._storage).length > self._get_length(node.left_ref) else 0),
+            )
+        elif key > node.key:
+            new_right = self._insert(self._follow(node.right_ref), key, value_ref)
+            new_node = BinaryNode(
+                node.left_ref,
+                new_right,
+                node.key,
+                node.value_ref,
+                node.length + (1 if new_right.get(self._storage).length > self._get_length(node.right_ref) else 0),
+            )
+        else:
+            new_node = BinaryNode(
+                node.left_ref,
+                node.right_ref,
+                key,
+                value_ref,
+                node.length,
+            )
+        return self.node_ref_class(referent=new_node)
+
+    def _get_length(self, node_ref):
+        node = self._follow(node_ref)
+        return node.length if node else 0
+
+    def _follow(self, ref):
+        return ref.get(self._storage) if ref else None
+
+    def __len__(self):
+        if not self._storage.locked:
+            self._refresh_tree_ref()
+        root = self._follow(self._tree_ref)
+        return root.length if root else 0
