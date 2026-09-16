@@ -9,33 +9,41 @@ class Storage:
 
     def __init__(self, f):
         self._f = f
-        self.locked = False
+        self._locked = False
         self._ensure_superblock()
 
     @property
     def closed(self):
         return self._f.closed
 
+    @property
+    def locked(self):
+        return self._locked
+
     def _ensure_superblock(self):
         self.lock()
-        self._seek_end()
-        end_address = self._f.tell()
-        if end_address < self.SUPERBLOCK_SIZE:
-            self._f.seek(0)
-            self._f.write(b"\x00" * self.SUPERBLOCK_SIZE)
-            self._f.flush()
-        self.unlock()
+        try:
+            self._seek_end()
+            end_address = self._f.tell()
+            if end_address < self.SUPERBLOCK_SIZE:
+                self._f.seek(0)
+                self._f.write(b"\x00" * self.SUPERBLOCK_SIZE)
+                self._f.flush()
+        finally:
+            self.unlock()
 
     def lock(self):
-        if not self.locked:
+        if not self._locked:
+            self._f.seek(0)
             portalocker.lock(self._f, portalocker.LOCK_EX)
-            self.locked = True
+            self._locked = True
 
     def unlock(self):
-        if self.locked:
+        if self._locked:
             self._f.flush()
+            self._f.seek(0)
             portalocker.unlock(self._f)
-            self.locked = False
+            self._locked = False
 
     def _seek_end(self):
         self._f.seek(0, os.SEEK_END)
@@ -58,11 +66,13 @@ class Storage:
 
     def commit_root_address(self, root_address: int):
         self.lock()
-        self._f.flush()
-        self._seek_superblock()
-        self._write_superblock_integer(root_address)
-        self._f.flush()
-        self.unlock()
+        try:
+            self._f.flush()
+            self._seek_superblock()
+            self._write_superblock_integer(root_address)
+            self._f.flush()
+        finally:
+            self.unlock()
 
     def get_root_address(self) -> int:
         self._seek_superblock()
