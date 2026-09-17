@@ -2,11 +2,24 @@ import os
 import pytest
 from dbdb.interface import connect
 from dbdb.tool import main
+from dbdb.cache import LRUCache
 
 
 @pytest.fixture
 def temp_db_path(tmp_path):
     return str(tmp_path / "test.db")
+
+
+def test_lru_cache_eviction_policy():
+    cache = LRUCache(capacity=2)
+    cache.set("a", 1)
+    cache.set("b", 2)
+    assert cache.get("a") == 1  # 'a' is accessed, making 'b' the least recently used
+
+    cache.set("c", 3)  # Evicts 'b'
+    assert cache.get("b") is None
+    assert cache.get("a") == 1
+    assert cache.get("c") == 3
 
 
 def test_basic_key_value_operations(temp_db_path):
@@ -111,4 +124,19 @@ def test_compaction_shrinks_file_size(temp_db_path):
     # 3. Assert disk footprint dropped significantly
     assert compacted_size < bloated_size
     assert db["heavy_key"] == "bloated_value_49" * 10
+    db.close()
+
+
+def test_cache_hits_and_persistence(temp_db_path):
+    # Connect with small cache
+    db = connect(temp_db_path, cache_capacity=10)
+    for i in range(10):
+        db[f"key_{i}"] = f"value_{i}"
+    db.commit()
+
+    # Reading values should populate and utilize the cache
+    for i in range(10):
+        assert db[f"key_{i}"] == f"value_{i}"
+
+    assert len(db._storage.cache) > 0
     db.close()
