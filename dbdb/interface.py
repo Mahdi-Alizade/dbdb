@@ -4,8 +4,8 @@ from dbdb.physical import Storage
 
 
 class DBDB:
-    def __init__(self, f):
-        self._storage = Storage(f)
+    def __init__(self, f, cache_capacity: int = 256):
+        self._storage = Storage(f, cache_capacity=cache_capacity)
         self._tree = BinaryTree(self._storage)
 
     def _assert_not_closed(self):
@@ -89,9 +89,9 @@ class DBDB:
         self._tree = BinaryTree(self._storage)
 
 
-def connect(dbname):
+def connect(dbname, cache_capacity: int = 256):
     try:
         f = open(dbname, "r+b")
     except IOError:
         f = open(dbname, "w+b")
-    return DBDB(f)
+    return DBDB(f, cache_capacity=cache_capacity)
