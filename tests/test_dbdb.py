@@ -76,3 +76,39 @@ def test_cli_set_get_and_delete(temp_db_path, capsys):
     assert main(["tool.py", temp_db_path, "get", "cli_key"]) == 1
     captured_err = capsys.readouterr()
     assert "KeyError" in captured_err.err
+
+
+def test_iteration_and_dictionary_views(temp_db_path):
+    db = connect(temp_db_path)
+    data = {"b": "banana", "a": "apple", "c": "cherry"}
+    for k, v in data.items():
+        db[k] = v
+    db.commit()
+
+    # In-order traversal must return sorted keys
+    assert list(db) == ["a", "b", "c"]
+    assert db.keys() == ["a", "b", "c"]
+    assert db.values() == ["apple", "banana", "cherry"]
+    assert db.items() == [("a", "apple"), ("b", "banana"), ("c", "cherry")]
+    db.close()
+
+
+def test_compaction_shrinks_file_size(temp_db_path):
+    db = connect(temp_db_path)
+    
+    # 1. Overwrite the same key 50 times to produce garbage nodes
+    for i in range(50):
+        db["heavy_key"] = f"bloated_value_{i}" * 10
+        db.commit()
+
+    bloated_size = os.path.getsize(temp_db_path)
+
+    # 2. Trigger compaction
+    db.compact()
+
+    compacted_size = os.path.getsize(temp_db_path)
+
+    # 3. Assert disk footprint dropped significantly
+    assert compacted_size < bloated_size
+    assert db["heavy_key"] == "bloated_value_49" * 10
+    db.close()
