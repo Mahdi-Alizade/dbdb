@@ -82,7 +82,6 @@ class BinaryTree:
         self._refresh_tree_ref()
 
     def commit(self):
-        root_address = self._tree_ref.address
         self._tree_ref.store(self._storage)
         self._storage.commit_root_address(self._tree_ref.address)
 
@@ -210,3 +209,15 @@ class BinaryTree:
             self._refresh_tree_ref()
         root = self._follow(self._tree_ref)
         return root.length if root else 0
+
+    def items(self):
+        if not self._storage.locked:
+            self._refresh_tree_ref()
+        yield from self._in_order_traverse(self._tree_ref)
+
+    def _in_order_traverse(self, node_ref):
+        node = self._follow(node_ref)
+        if node is not None:
+            yield from self._in_order_traverse(node.left_ref)
+            yield (node.key, self._follow(node.value_ref))
+            yield from self._in_order_traverse(node.right_ref)
