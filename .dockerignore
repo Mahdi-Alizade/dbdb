@@ -1,0 +1,23 @@
+# Virtual Environment
+venv/
+.venv/
+env/
+
+# Byte-code & cache
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+
+# Git & Editor metadata
+.git/
+.gitignore
+.vscode/
+.idea/
+
+# Local databases & artifacts
+*.db
+*.compact
+*.lock
+.coverage
+htmlcov/
