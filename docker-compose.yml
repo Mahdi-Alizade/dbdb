@@ -1,0 +1,18 @@
+version: "3.8"
+
+services:
+  dbdb:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: dbdb-server
+    restart: unless-stopped
+    ports:
+      - "8888:8888"
+    volumes:
+      - dbdb_storage:/data
+    command: ["/data/production.db", "0.0.0.0", "8888"]
+
+volumes:
+  dbdb_storage:
+    name: dbdb_data_volume
