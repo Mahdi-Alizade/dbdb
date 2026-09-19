@@ -1,128 +1,146 @@
-# DBDB: Dog Bed Database (Advanced Edition)
+# DBDB: Dog Bed Database (Distributed Sharded Edition)
 
-A production-grade, persistent, append-only key-value storage engine built in Python. 
+A production-grade, distributed, append-only key-value storage engine written in Python.
 
-Originally inspired by the foundational architecture in *500 Lines or Less*, this project has been extensively engineered into a standalone, network-accessible, and containerized database service. It serves as a comprehensive implementation of low-level database concepts including storage engines, buffer pools, and concurrency control.
+Originally conceptualized from the core principles in *500 Lines or Less*, this project has evolved into a horizontally partitioned, containerized, and high-performance distributed database. It incorporates low-level disk append semantics, an in-memory buffer pool, copy-on-write trees, a primary-replica streaming protocol, and a consistent hashing reverse proxy.
 
 ---
 
 ## 🚀 Key Architectural Features
 
-*   **Append-Only Disk I/O:** Data is never overwritten in place. This ensures crash resilience, preventing database corruption even during abrupt power failures.
-*   **Immutable Binary Search Tree:** Updates utilize strict copy-on-write semantics. Only the path from the modified node up to the root is written to disk, securely sharing untouched subtrees with historical states.
-*   **Buffer Pool (LRU Cache):** An integrated Least Recently Used (LRU) memory cache intercepts disk reads, serving frequently accessed tree nodes and values directly from RAM to maximize throughput.
-*   **Atomic Compaction (Vacuuming):** A seamless `compact()` mechanism traverses the live tree and rewrites only active data to a new file, atomically replacing the bloated file to reclaim disk space without corrupting the database lock.
-*   **Asynchronous TCP Server:** A custom network layer built on `asyncio` handles multiple concurrent client connections. Disk I/O operations are offloaded to thread pools (`asyncio.to_thread`) with strict locking to prevent event-loop blocking.
-*   **Multi-Stage Docker Deployment:** Containerized for production using a minimal `python:3.13-slim` image, executing under a secure non-root user with persistent volume mapping.
+*   **Append-Only Storage Engine:** Data is never updated in place. Every write appends new bytes to the end of the file, guaranteeing atomicity and crash tolerance without data file corruption.
+*   **Immutable Copy-on-Write BST:** Key indexing uses an immutable Binary Search Tree. Modifications spawn a new path from leaf to root while safely sharing untouched subtrees with historical snapshots.
+*   **Buffer Pool (LRU Cache):** Integrated Least Recently Used (LRU) memory cache intercepts disk reads, serving frequently referenced nodes and values directly from RAM.
+*   **Atomic Vacuuming (Compaction):** The `compact()` operation walks live nodes from the root, writes an unfragmented data file, and atomically hot-swaps the underlying file descriptors without deadlocks.
+*   **Consistent Hashing Sharding Proxy:** Transparent network router using virtual nodes ($V=100$) over an MD5 hash ring, achieving uniform key distribution ($O(\log N)$ binary search routing) across independent physical shard instances.
+*   **Primary-Replica Asynchronous Sync:** Native TCP replication streaming that broadcasts write operations (`SET`, `DEL`, `COMPACT`) from primaries to read-only replica instances.
+*   **Multi-Stage Docker & Compose Orchestration:** Fully containerized setup executing under non-root permissions with named volumes for decoupled data persistence.
 
 ---
 
-## 🏗️ System Architecture
+## 🏗️ Distributed Architecture & Topology
 
 ```text
+                           +------------------------+
+                           |     TCP Client(s)      |
+                           +------------------------+
+                                       |
+                                       | Port 9000
+                                       v
+                    +--------------------------------------+
+                    |         DBDB Sharding Proxy          |
+                    |  - MD5 Consistent Hash Ring          |
+                    |  - Virtual Nodes (V=100 per shard)   |
+                    |  - Transparent TCP Request Routing   |
+                    +--------------------------------------+
+                         /             |             \
+       Hash Range [0..A] /  Hash Range | [A..B]       \ Hash Range [B..2^32-1]
+                        v              v               v
+               +---------------+ +---------------+ +---------------+
+               | dbdb-shard-1  | | dbdb-shard-2  | | dbdb-shard-3  |
+               |  (Port 8881)  | |  (Port 8882)  | |  (Port 8883)  |
+               +---------------+ +---------------+ +---------------+
+               | Physical File | | Physical File | | Physical File |
+               | + LRU Cache   | | + LRU Cache   | | + LRU Cache   |
+               +---------------+ +---------------+ +---------------+
+Storage Node Internal Hierarchy
+Plaintext
 +-------------------------------------------------------------+
-|                     Async TCP Clients                       |
+| 1. Async Network Dispatcher (asyncio TCP Server)            |
 +-------------------------------------------------------------+
-                              | (TCP / 8888)
+| 2. DBDB Public Interface (Dict Protocol / Atomic Commit)    |
 +-------------------------------------------------------------+
-| 1. Network Layer (asyncio Server)                           |
-|    - Command Parsing (GET, SET, DEL, COMPACT, PING)         |
-|    - Thread-safe I/O dispatching                            |
+| 3. Logical Reference Engine (ValueRef & BinaryNodeRef)      |
 +-------------------------------------------------------------+
-| 2. Interface Layer (DBDB API)                               |
-|    - Dictionary protocol (__getitem__, __setitem__, __iter__)|
+| 4. Immutable Tree Layer (Path Copying & In-Order Traversal) |
 +-------------------------------------------------------------+
-| 3. Logical Layer (ValueRef / BinaryNodeRef)                 |
-|    - Lazy serialization, pointer resolution, iteration      |
+| 5. Physical Storage & Buffer Pool (LRU Cache + Superblock)  |
 +-------------------------------------------------------------+
-| 4. Binary Tree Layer (Immutable BST)                        |
-|    - Copy-on-write path replacement, in-order traversal     |
-+-------------------------------------------------------------+
-| 5. Physical Storage Layer (Append-Only File + LRU Cache)    |
-|    - In-memory Buffer Pool                                  |
-|    - Append-only disk writes, Superblock, OS file locking   |
-+-------------------------------------------------------------+
-🐳 Docker Deployment (Recommended)
-The easiest way to run the DBDB network server is via Docker Compose. This ensures the database runs in an isolated environment while persisting your data.
+🐳 Docker Deployment & Sharded Cluster
+The default docker-compose.yml provisions a distributed setup consisting of 3 isolated shard instances and 1 central sharding proxy.
 
 Bash
-# Start the server in detached mode
+# Build images and boot the 4-node cluster in background
 docker compose up -d --build
 
-# View server logs
+# Monitor live routing and query dispatch logs across all nodes
 docker compose logs -f
 
-# Shut down the server (data remains safe in the volume)
-docker compose down
-💻 Local Installation
-If you prefer to run it locally without Docker:
+# Inspect proxy routing decisions specifically
+docker logs -f dbdb-proxy
 
-Bash
+# Tear down cluster and remove persistent volumes
+docker compose down -v
+💻 Local Development Setup
+If running directly on the host machine without containerization:
+
+PowerShell
+# Clone and setup environment
 git clone [https://github.com/](https://github.com/)<your-username>/dbdb.git
 cd dbdb
 python -m venv venv
-
-# Windows
 .\venv\Scripts\Activate.ps1
-# Linux/macOS
-source venv/bin/activate
 
+# Install dependencies
 pip install -r requirements.txt
-🛠️ Usage Guide
-1. Connecting via Async TCP Client
-You can interact with the running server (Docker or local) using the provided asynchronous client.
+🛠️ Usage Examples
+1. Interacting via Sharding Proxy
+Connect your application to the proxy port (9000). Keys are hashed and dispatched automatically to the designated physical shard.
 
 Python
 import asyncio
 from dbdb.client import DBDBClient
 
 async def main():
-    client = DBDBClient(host="127.0.0.1", port=8888)
+    # Connect directly to the Proxy router
+    client = DBDBClient(host="127.0.0.1", port=9000)
     await client.connect()
 
-    # Set and Get values
-    await client.set("architecture", "append-only")
-    value = await client.get("architecture")
-    print(value)  # Output: append-only
+    # Data is hashed and partitioned across shards
+    await client.set("user:1001", "{'name': 'Mahdi', 'role': 'Admin'}")
+    await client.set("user:1002", "{'name': 'Alex', 'role': 'Engineer'}")
 
-    # Reclaim disk space over the network
+    val = await client.get("user:1001")
+    print(f"Retrieved: {val}")
+
+    # Broadcasts vacuuming across all managed shards
     await client.compact()
-    
+
     await client.close()
 
-asyncio.run(main())
-2. Embedded Python Library
-Use DBDB directly inside your Python applications as a persistent dictionary.
+if __name__ == "__main__":
+    asyncio.run(main())
+2. Standalone Embedded Library
+Use the database engine directly within local Python applications without running any network servers:
 
 Python
 from dbdb import connect
 
-# Connect with a custom LRU cache capacity
-db = connect("local.db", cache_capacity=512)
+# Open database with custom LRU cache capacity
+db = connect("analytics.db", cache_capacity=1024)
 
-db["system"] = "distributed"
+db["session_a"] = "active"
+db["session_b"] = "idle"
 db.commit()
 
-# Iterate through sorted keys (In-Order Traversal)
+# Sorted key retrieval via In-Order Tree Traversal
 for key, value in db.items():
-    print(f"{key} -> {value}")
+    print(f"{key} => {value}")
 
+# Trigger garbage cleanup
+db.compact()
 db.close()
-3. Command Line Interface (CLI)
-Interact with local database files directly from the terminal.
+🧪 Test Suite Execution
+The repository provides unit tests, disk compaction verifications, and multi-node cluster benchmarks:
 
-Bash
-python -m dbdb.tool local.db set host "127.0.0.1"
-python -m dbdb.tool local.db get host
-python -m dbdb.tool local.db delete host
-🧪 Testing
-The project includes a comprehensive test suite covering edge cases, I/O locks, caching eviction policies, and network integration.
-
-Bash
-# Run unit and integration tests
+PowerShell
+# Run all unit tests (Storage, BST, LRU Cache, Compaction)
 pytest -v
 
-# Run the network integration test against the live server
-python test_network.py
+# Validate horizontal sharding distribution across the live cluster
+python test_sharding.py
+
+# Validate primary-replica synchronization (when running replication topology)
+python test_replication.py
 📜 License
-This project is open-source and available under the MIT License.
+This project is open-source under the MIT License.
