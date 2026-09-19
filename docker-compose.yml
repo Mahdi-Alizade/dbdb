@@ -1,64 +1,68 @@
 version: "3.8"
 
 services:
-  dbdb-primary:
+  dbdb-shard-1:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: dbdb-primary
+    container_name: dbdb-shard-1
     restart: unless-stopped
     ports:
-      - "8888:8888"
+      - "8881:8881"
     volumes:
-      - primary_storage:/data
-    command: ["/data/primary.db", "--host", "0.0.0.0", "--port", "8888", "--role", "primary"]
+      - shard1_storage:/data
+    command: ["/data/shard1.db", "--host", "0.0.0.0", "--port", "8881"]
 
-  dbdb-replica-1:
+  dbdb-shard-2:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: dbdb-replica-1
+    container_name: dbdb-shard-2
+    restart: unless-stopped
+    ports:
+      - "8882:8882"
+    volumes:
+      - shard2_storage:/data
+    command: ["/data/shard2.db", "--host", "0.0.0.0", "--port", "8882"]
+
+  dbdb-shard-3:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: dbdb-shard-3
+    restart: unless-stopped
+    ports:
+      - "8883:8883"
+    volumes:
+      - shard3_storage:/data
+    command: ["/data/shard3.db", "--host", "0.0.0.0", "--port", "8883"]
+
+  dbdb-proxy:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: dbdb-proxy
     restart: unless-stopped
     depends_on:
-      - dbdb-primary
+      - dbdb-shard-1
+      - dbdb-shard-2
+      - dbdb-shard-3
     ports:
-      - "8889:8889"
-    volumes:
-      - replica1_storage:/data
+      - "9000:9000"
+    entrypoint: ["python", "-m", "dbdb.proxy"]
     command: [
-      "/data/replica1.db",
       "--host", "0.0.0.0",
-      "--port", "8889",
-      "--role", "replica",
-      "--master-host", "dbdb-primary",
-      "--master-port", "8888"
-    ]
-
-  dbdb-replica-2:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    container_name: dbdb-replica-2
-    restart: unless-stopped
-    depends_on:
-      - dbdb-primary
-    ports:
-      - "8890:8890"
-    volumes:
-      - replica2_storage:/data
-    command: [
-      "/data/replica2.db",
-      "--host", "0.0.0.0",
-      "--port", "8890",
-      "--role", "replica",
-      "--master-host", "dbdb-primary",
-      "--master-port", "8888"
+      "--port", "9000",
+      "--shards",
+      "dbdb-shard-1:8881",
+      "dbdb-shard-2:8882",
+      "dbdb-shard-3:8883"
     ]
 
 volumes:
-  primary_storage:
-    name: dbdb_primary_volume
-  replica1_storage:
-    name: dbdb_replica1_volume
-  replica2_storage:
-    name: dbdb_replica2_volume
+  shard1_storage:
+    name: dbdb_shard1_volume
+  shard2_storage:
+    name: dbdb_shard2_volume
+  shard3_storage:
+    name: dbdb_shard3_volume
