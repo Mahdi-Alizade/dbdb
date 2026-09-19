@@ -2,7 +2,7 @@ import asyncio
 
 
 class DBDBClient:
-    def __init__(self, host: str = '127.0.0.1', port: int = 8888):
+    def __init__(self, host: str = "127.0.0.1", port: int = 8888):
         self.host = host
         self.port = port
         self.reader = None
@@ -19,10 +19,10 @@ class DBDBClient:
     async def _send_command(self, command: str) -> str:
         if not self.writer:
             await self.connect()
-        
+
         self.writer.write((command + "\n").encode())
         await self.writer.drain()
-        
+
         data = await self.reader.readline()
         return data.decode().strip()
 
@@ -54,22 +54,24 @@ class DBDBClient:
     async def ping(self):
         return await self._send_command("PING")
 
+    async def role(self):
+        response = await self._send_command("ROLE")
+        if response.startswith("ROLE "):
+            return response[5:]
+        raise RuntimeError(f"Server error: {response}")
 
-# Example interactive execution
+
 async def main():
     client = DBDBClient()
     await client.connect()
     print("[*] Connected to DBDB Server")
-    
+
     pong = await client.ping()
     print(f"[*] PING -> {pong}")
-    
-    await client.set("framework", "FastAPI")
-    print("[*] SET framework FastAPI -> OK")
-    
-    val = await client.get("framework")
-    print(f"[*] GET framework -> {val}")
-    
+
+    role = await client.role()
+    print(f"[*] Node role -> {role}")
+
     await client.close()
 
 
